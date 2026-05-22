@@ -1,36 +1,57 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# qwentui
 
-## Getting Started
+Terminal-style chat interface for Qwen models via the Hugging Face Inference API.
 
-First, run the development server:
+## Setup
+
+1. Install dependencies:
+
+```bash
+npm install
+```
+
+2. Copy the environment file and add your Hugging Face token:
+
+```bash
+cp .env.example .env.local
+```
+
+Get your token at https://huggingface.co/settings/tokens.
+
+3. Start the dev server:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open http://localhost:3000 in your browser.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Usage
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+The interface is a terminal emulator. Available commands:
 
-## Learn More
+| Command | Description |
+|---------|-------------|
+| `/help` | Show available commands |
+| `/models` | List available Qwen models |
+| `/model <name>` | Select a model by name |
+| `/info <model>` | Show model information |
+| `/clear` | Clear the terminal |
+| `/stop` | Stop the current response |
 
-To learn more about Next.js, take a look at the following resources:
+Press `Esc` to abort streaming at any time.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Type a number while the model list is displayed to select a model by index.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Architecture
 
-## Deploy on Vercel
+- **`src/app/page.tsx`** — Terminal UI (client component)
+- **`src/app/api/query/route.ts`** — API route for model listing and info (spawns Python bridge)
+- **`src/app/api/chat/route.ts`** — API route for streaming chat (spawns Python bridge, returns NDJSON stream)
+- **`qwen_bridge.py`** — Python script that reads JSON commands from stdin and calls Hugging Face `InferenceClient`
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Environment Variables
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `HF_TOKEN` | Yes | Hugging Face API token |
