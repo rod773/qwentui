@@ -1,87 +1,123 @@
-import { spawn } from "child_process";
-import path from "path";
 import { NextRequest } from "next/server";
 
 export const dynamic = "force-dynamic";
 
+const HF_TOKEN = process.env.HF_TOKEN;
+
 export async function POST(req: NextRequest) {
   const { model, messages } = await req.json();
-  const pythonScript = path.join(process.cwd(), "qwen_bridge.py");
 
   const encoder = new TextEncoder();
 
-  let controller: ReadableStreamDefaultController | null = null;
-  let proc: ReturnType<typeof spawn> | null = null;
-
   const stream = new ReadableStream({
-    start(c) {
-      controller = c;
-      const pythonCmd = process.platform === "win32" ? "python" : "python3";
-      proc = spawn(pythonCmd, [pythonScript], {
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-
-      let streamEnded = false;
-
-      function endStream() {
-        if (streamEnded) return;
-        streamEnded = true;
-        try {
-          controller?.close();
-        } catch {}
-      }
-
-      proc.stdout?.on("data", (data: Buffer) => {
-        const text = data.toString();
-        const lines = text.split("\n").filter(Boolean);
-        for (const line of lines) {
-          try {
-            JSON.parse(line);
-            controller?.enqueue(encoder.encode(line + "\n"));
-          } catch {}
-        }
-      });
-
-      proc.stderr?.on("data", (data: Buffer) => {
-        console.error("python stderr:", data.toString());
-      });
-
-      proc.on("close", (code) => {
-        if (code !== 0 && !streamEnded) {
-          console.error("python exited with code:", code);
-        }
-        endStream();
-      });
-
-      proc.on("error", (err) => {
-        console.error("python spawn error:", err);
-        if (!streamEnded) {
-          try {
-            controller?.enqueue(
-              encoder.encode(
-                JSON.stringify({
-                  type: "error",
-                  message: `Failed to start Python: ${err.message}`,
-                }) + "\n"
-              )
-            );
-          } catch {}
-        }
-        endStream();
-      });
-
-      const reqMsg =
-        JSON.stringify({ command: "stream_chat", model, messages }) + "\n";
-      proc.stdin?.write(reqMsg);
-      proc.stdin?.end();
-    },
-    cancel() {
-      if (proc && !proc.killed) {
-        proc.kill("SIGTERM");
-      }
+    async start(controller) {
       try {
-        controller?.close();
-      } catch {}
+        const hfMessages = messages.map(
+          (m: { role: string; content: string }) => ({
+            role: m.role,
+            content: m.content,
+          })
+        );
+
+        const res = await fetch(
+          `https://api-inference.huggingface.co/models/${model}/v1/chat/completions`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${HF_TOKEN}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model,
+              messages: hfMessages,
+              stream: true,
+              max_tokens: 2048,
+            }),
+          }
+        );
+
+        if (!res.ok) {
+          const errText = await res.text();
+          controller.enqueue(
+            encoder.encode(
+              JSON.stringify({
+                type: "error",
+                message: `HF API error (${res.status}): ${errText}`,
+              }) + "\n"
+            )
+          );
+          controller.close();
+          return;
+        }
+
+        const reader = res.body?.getReader();
+        if (!reader) {
+          controller.enqueue(
+            encoder.encode(
+              JSON.stringify({ type: "error", message: "No response body" }) +
+                "\n"
+            )
+          );
+          controller.close();
+          return;
+        }
+
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || !trimmed.startsWith("data:")) continue;
+            const data = trimmed.slice(5).trim();
+            if (data === "[DONE]") {
+              controller.enqueue(
+                encoder.encode(JSON.stringify({ type: "done" }) + "\n")
+              );
+              continue;
+            }
+            try {
+              const parsed = JSON.parse(data);
+              const content = parsed.choices?.[0]?.delta?.content;
+              if (content) {
+                controller.enqueue(
+                  encoder.encode(
+                    JSON.stringify({ type: "token", data: content }) + "\n"
+                  )
+                );
+              }
+            } catch {
+              // skip malformed JSON lines
+            }
+          }
+        }
+
+        controller.enqueue(
+          encoder.encode(JSON.stringify({ type: "done" }) + "\n")
+        );
+      } catch (err) {
+        controller.enqueue(
+          encoder.encode(
+            JSON.stringify({
+              type: "error",
+              message: String(err),
+            }) + "\n"
+          )
+        );
+      } finally {
+        try {
+          controller.close();
+        } catch {
+          // ignore close errors
+        }
+      }
     },
   });
 
@@ -89,7 +125,6 @@ export async function POST(req: NextRequest) {
     headers: {
       "Content-Type": "application/x-ndjson",
       "Cache-Control": "no-cache",
-      "X-Accel-Buffering": "no",
     },
   });
 }

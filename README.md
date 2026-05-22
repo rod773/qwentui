@@ -46,9 +46,8 @@ Type a number while the model list is displayed to select a model by index.
 ## Architecture
 
 - **`src/app/page.tsx`** — Terminal UI (client component)
-- **`src/app/api/query/route.ts`** — API route for model listing and info (spawns Python bridge)
-- **`src/app/api/chat/route.ts`** — API route for streaming chat (spawns Python bridge, returns NDJSON stream)
-- **`qwen_bridge.py`** — Python script that reads JSON commands from stdin and calls Hugging Face `InferenceClient`
+- **`src/app/api/query/route.ts`** — API route for model listing and info (calls HF API directly)
+- **`src/app/api/chat/route.ts`** — API route for streaming chat (calls HF Inference API, converts SSE to NDJSON stream)
 
 ## Environment Variables
 
